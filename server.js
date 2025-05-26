@@ -6,10 +6,16 @@ const axios = require('axios');
 puppeteer.use(StealthPlugin());
 
 const app = express();
-const port = 3000;
+const port = process.env.PORT || 3000;
 
 app.use(express.json());
+app.get('/', (req, res) => {
+  res.send('Hello from Node.js on Render!');
+});
 
+app.listen(port, () => {
+  console.log(`Server running at http://localhost:${port}`);
+});
 // Hàm tự động cuộn trang để tải nội dung lazy-load
 async function autoScroll(page) {
     await page.evaluate(async () => {
@@ -251,7 +257,7 @@ async function scrapeWebsite(url, websiteId, chatbotId, req) {
 
         while (backendAttempt < maxBackendRetries) {
             try {
-                const responseBackend = await axios.post('http://127.0.0.1:8000/api/process-scraped-content', postData, {
+                const responseBackend = await axios.post('https://nongsan.newwaytech.vn//api/process-scraped-content', postData, {
                     headers: { 
                         'Content-Type': 'application/json',
                         'Accept': 'application/json'
