@@ -8,7 +8,7 @@ const { JSDOM } = jsdom;
 puppeteer.use(StealthPlugin());
 
 const app = express();
-const port = process.env.PORT || 3000;
+const port = 3000;
 
 app.use(express.json());
 
@@ -42,10 +42,19 @@ function splitStringByLength(str, maxLength) {
     return result;
 }
 
-// Hàm tách sản phẩm bằng rule code (jsdom)
-function extractProductsAndArticlesByRule(innerHTML) {
+// Hàm tách sản phẩm bằng rule code (jsdom) - ĐÃ SỬA
+function extractProductsAndArticlesByRule(innerHTML, baseUrl) {
     const dom = new JSDOM(innerHTML);
     const document = dom.window.document;
+
+    // Hàm helper để chuyển relative URL thành absolute URL
+    const toAbsoluteUrl = (url) => {
+        if (!url) return '';
+        if (url.startsWith('http')) return url;
+        if (url.startsWith('//')) return `https:${url}`;
+        if (url.startsWith('/')) return new URL(url, baseUrl).href;
+        return new URL(url, baseUrl).href;
+    };
 
     // Sản phẩm
     const productNodes = document.querySelectorAll('div[class*="product"], li[class*="product"]');
@@ -53,8 +62,8 @@ function extractProductsAndArticlesByRule(innerHTML) {
     productNodes.forEach(node => {
         let name = node.querySelector('h2, h3, .product-title, .title')?.textContent?.trim() || '';
         let price = node.querySelector('.price, .product-price, [class*="price"]')?.textContent?.trim() || '';
-        let img = node.querySelector('img')?.getAttribute('src') || '';
-        let url = node.querySelector('a')?.getAttribute('href') || '';
+        let img = toAbsoluteUrl(node.querySelector('img')?.getAttribute('src') || '');
+        let url = toAbsoluteUrl(node.querySelector('a')?.getAttribute('href') || '');
         if (name) {
             products.push({ name, price, image: img, url });
         }
@@ -65,8 +74,8 @@ function extractProductsAndArticlesByRule(innerHTML) {
     const articles = [];
     articleNodes.forEach(node => {
         let title = node.querySelector('h2, h3, .article-title, .post-title, .title')?.textContent?.trim() || '';
-        let url = node.querySelector('a')?.getAttribute('href') || '';
-        let img = node.querySelector('img')?.getAttribute('src') || '';
+        let url = toAbsoluteUrl(node.querySelector('a')?.getAttribute('href') || '');
+        let img = toAbsoluteUrl(node.querySelector('img')?.getAttribute('src') || '');
         if (title) {
             articles.push({ title, url, image: img });
         }
@@ -82,7 +91,9 @@ async function scrapeWebsite(url, websiteId, chatbotId, req) {
     try {
         console.log('[Puppeteer] Khởi tạo trình duyệt Puppeteer...');
         browser = await puppeteer.launch({
-            headless: true, // Sử dụng true cho cloud
+            headless: 'new',
+            executablePath: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+            timeout: 0,
             args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
@@ -138,7 +149,7 @@ async function scrapeWebsite(url, websiteId, chatbotId, req) {
         });
 
         // Áp dụng rule code trước
-         const { products: productsByRule, articles: articlesByRule } = extractProductsAndArticlesByRule(innerHTML);
+         const { products: productsByRule, articles: articlesByRule } = extractProductsAndArticlesByRule(innerHTML, url);
 
         let allProducts = [];
         let allArticles = [];
@@ -152,7 +163,7 @@ async function scrapeWebsite(url, websiteId, chatbotId, req) {
             // Nếu không tách được hoặc quá ít, mới gửi lên OpenAI như cũ
             const MAX_LENGTH = 80000;
             const htmlParts = splitStringByLength(innerHTML, MAX_LENGTH);
-            const BACKEND_URL = 'https://chatbot.newwaytech.vn/api';
+
             for (let idx = 0; idx < htmlParts.length; idx++) {
                 const part = htmlParts[idx];
                 const postData = {
@@ -207,8 +218,7 @@ async function scrapeWebsite(url, websiteId, chatbotId, req) {
             }
         };
         try {
-            // Sửa endpoint này về đúng backend thật
-            const saveResponse = await axios.post(`${BACKEND_URL}/save-scraped-result`, finalPostData, {
+            const saveResponse = await axios.post('http://127.0.0.1:8000/api/save-scraped-result', finalPostData, {
                 headers: { 
                     'Content-Type': 'application/json',
                     'Accept': 'application/json'
@@ -253,7 +263,8 @@ app.get('/test-chrome', async (req, res) => {
     try {
         console.log('[Test] Bắt đầu kiểm tra Chrome với Puppeteer...');
         browser = await puppeteer.launch({
-            headless: true, // Sửa lại, bỏ executablePath
+            headless: 'new',
+            executablePath: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
             args: ['--no-sandbox', '--disable-extensions'],
             timeout: 180000,
         });
@@ -277,12 +288,13 @@ app.get('/test-chrome', async (req, res) => {
 
 // API endpoint để test URL
 app.get('/test-url', async (req, res) => {
-    const url = req.query.url || 'https://chatbot.newwaytech.vn/';
+    const url = req.query.url || 'http://127.0.0.1:8082/';
     let browser;
     try {
         console.log(`[Test] Bắt đầu kiểm tra truy cập URL: ${url}`);
         browser = await puppeteer.launch({
-            headless: true, // Sửa lại, bỏ executablePath
+            headless: 'new',
+            executablePath: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
             args: ['--no-sandbox', '--disable-extensions'],
             timeout: 180000,
         });
