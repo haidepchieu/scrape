@@ -92,7 +92,7 @@ async function scrapeWebsite(url, websiteId, chatbotId, req) {
         console.log('[Puppeteer] Khởi tạo trình duyệt Puppeteer...');
         browser = await puppeteer.launch({
             headless: 'new',
-            executablePath: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+            
             timeout: 0,
             args: [
                 '--no-sandbox',
@@ -264,7 +264,7 @@ app.get('/test-chrome', async (req, res) => {
         console.log('[Test] Bắt đầu kiểm tra Chrome với Puppeteer...');
         browser = await puppeteer.launch({
             headless: 'new',
-            executablePath: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+            
             args: ['--no-sandbox', '--disable-extensions'],
             timeout: 180000,
         });
@@ -294,7 +294,7 @@ app.get('/test-url', async (req, res) => {
         console.log(`[Test] Bắt đầu kiểm tra truy cập URL: ${url}`);
         browser = await puppeteer.launch({
             headless: 'new',
-            executablePath: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+            
             args: ['--no-sandbox', '--disable-extensions'],
             timeout: 180000,
         });
