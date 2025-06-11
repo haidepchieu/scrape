@@ -176,7 +176,7 @@ async function scrapeWebsite(url, websiteId, chatbotId, req) {
                 };
                 console.log(`[Puppeteer] Gửi đoạn ${idx + 1}/${htmlParts.length} về backend...`);
                 try {
-                    const responseBackend = await axios.post('http://127.0.0.1:8000/api/process-scraped-content', postData, {
+                    const responseBackend = await axios.post('https://chatbot.newwaytech.vn/api/process-scraped-content', postData, {
                         headers: { 
                             'Content-Type': 'application/json',
                             'Accept': 'application/json'
@@ -218,7 +218,7 @@ async function scrapeWebsite(url, websiteId, chatbotId, req) {
             }
         };
         try {
-            const saveResponse = await axios.post('http://127.0.0.1:8000/api/save-scraped-result', finalPostData, {
+            const saveResponse = await axios.post('https://chatbot.newwaytech.vn/api/save-scraped-result', finalPostData, {
                 headers: { 
                     'Content-Type': 'application/json',
                     'Accept': 'application/json'
