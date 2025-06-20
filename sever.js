@@ -2,6 +2,8 @@ const express = require('express');
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const axios = require('axios');
+const jsdom = require('jsdom');
+const { JSDOM } = jsdom;
 
 puppeteer.use(StealthPlugin());
 
@@ -27,6 +29,59 @@ async function autoScroll(page) {
             }, 100);
         });
     });
+}
+
+// Hàm chia nhỏ chuỗi thành các đoạn nhỏ
+function splitStringByLength(str, maxLength) {
+    const result = [];
+    let i = 0;
+    while (i < str.length) {
+        result.push(str.slice(i, i + maxLength));
+        i += maxLength;
+    }
+    return result;
+}
+
+// Hàm tách sản phẩm bằng rule code (jsdom) - ĐÃ SỬA
+function extractProductsAndArticlesByRule(innerHTML, baseUrl) {
+    const dom = new JSDOM(innerHTML);
+    const document = dom.window.document;
+
+    // Hàm helper để chuyển relative URL thành absolute URL
+    const toAbsoluteUrl = (url) => {
+        if (!url) return '';
+        if (url.startsWith('http')) return url;
+        if (url.startsWith('//')) return `https:${url}`;
+        if (url.startsWith('/')) return new URL(url, baseUrl).href;
+        return new URL(url, baseUrl).href;
+    };
+
+    // Sản phẩm
+    const productNodes = document.querySelectorAll('div[class*="product"], li[class*="product"]');
+    const products = [];
+    productNodes.forEach(node => {
+        let name = node.querySelector('h2, h3, .product-title, .title')?.textContent?.trim() || '';
+        let price = node.querySelector('.price, .product-price, [class*="price"]')?.textContent?.trim() || '';
+        let img = toAbsoluteUrl(node.querySelector('img')?.getAttribute('src') || '');
+        let url = toAbsoluteUrl(node.querySelector('a')?.getAttribute('href') || '');
+        if (name) {
+            products.push({ name, price, image: img, url });
+        }
+    });
+
+    // Bài viết
+    const articleNodes = document.querySelectorAll('div[class*="article"], li[class*="article"], div[class*="post"], li[class*="post"], article');
+    const articles = [];
+    articleNodes.forEach(node => {
+        let title = node.querySelector('h2, h3, .article-title, .post-title, .title')?.textContent?.trim() || '';
+        let url = toAbsoluteUrl(node.querySelector('a')?.getAttribute('href') || '');
+        let img = toAbsoluteUrl(node.querySelector('img')?.getAttribute('src') || '');
+        if (title) {
+            articles.push({ title, url, image: img });
+        }
+    });
+
+    return { products, articles };
 }
 
 // Hàm scrape website
@@ -57,16 +112,6 @@ async function scrapeWebsite(url, websiteId, chatbotId, req) {
         await page.setExtraHTTPHeaders({ 'Accept-Language': 'en-US,en;q=0.9' });
         await page.setBypassCSP(true);
 
-        // Bỏ qua tải hình ảnh, stylesheet, font để tăng tốc
-        await page.setRequestInterception(true);
-        page.on('request', (req) => {
-            if (['image', 'stylesheet', 'font'].includes(req.resourceType())) {
-                req.abort();
-            } else {
-                req.continue();
-            }
-        });
-
         console.log(`[Puppeteer] Truy cập URL: ${url}`);
         const maxRetries = 3;
         let attempt = 0;
@@ -89,206 +134,108 @@ async function scrapeWebsite(url, websiteId, chatbotId, req) {
 
         console.log('[Puppeteer] Cuộn trang để tải nội dung lazy...');
         await autoScroll(page);
-        await new Promise(resolve => setTimeout(resolve, 2000)); // Chờ thêm 2 giây để nội dung tải hết
+        await new Promise(resolve => setTimeout(resolve, 10000)); // Chờ thêm để nội dung tải hết
 
-        console.log('[Puppeteer] Đợi các phần tử sản phẩm/bài viết tải...');
-        await page.waitForSelector('.product-small, .article, .post, .news', { timeout: 30000 })
-            .catch(() => console.warn('[Puppeteer] Không tìm thấy phần tử, thử lấy dữ liệu từ API.'));
-
-        console.log('[Puppeteer] Thu thập dữ liệu sản phẩm và bài viết...');
-        const data = await page.evaluate(() => {
-            const products = [];
-            const articles = [];
-
-            // Quét sản phẩm
-            const productElements = document.querySelectorAll('.product-small');
-            productElements.forEach(element => {
-                const name = element.querySelector('.product-title')?.innerText?.trim() || '';
-                const price = element.querySelector('.woocommerce-Price-amount')?.innerText?.trim() || '';
-                const image = element.querySelector('img[src], img[data-src]')?.getAttribute('src') || element.querySelector('img')?.getAttribute('data-src') || '';
-                const url = element.querySelector('a[href*="chi-tiet-sp"]')?.getAttribute('href') || '';
-
-                if (name && price && url.includes('/chi-tiet-sp/')) {
-                    products.push({
-                        type: 'product',
-                        name,
-                        price,
-                        image: image.startsWith('http') ? image : new URL(image, window.location.origin).href,
-                        url: url.startsWith('http') ? url : new URL(url, window.location.origin).href
-                    });
-                }
+        // Lấy innerHTML đã loại bỏ các thẻ không cần thiết
+        console.log('[Puppeteer] Lấy innerHTML đã loại bỏ các thẻ không cần thiết...');
+        const innerHTML = await page.evaluate(() => {
+            const elementsToRemove = [
+                'script', 'style', 'footer', 'header',
+            ];
+            elementsToRemove.forEach(selector => {
+                document.querySelectorAll(selector).forEach(el => el.remove());
             });
-
-            // Quét bài viết
-            const articleElements = document.querySelectorAll('.article, .post, .news, [class*="article"], [class*="post"], [class*="news"], [data-article]');
-            articleElements.forEach(element => {
-                const title = element.querySelector('h1, h2, h3, h4, .title, .post-title, [class*="title"], [data-title]')?.innerText?.trim() || '';
-                const image = element.querySelector('img[src], img[data-src]')?.getAttribute('src') || element.querySelector('img')?.getAttribute('data-src') || '';
-                const url = element.querySelector('a[href*="chi-tiet/"]')?.getAttribute('href') || '';
-
-                if (title && url.includes('/chi-tiet/')) {
-                    articles.push({
-                        type: 'article',
-                        title,
-                        image: image.startsWith('http') ? image : new URL(image, window.location.origin).href,
-                        url: url.startsWith('http') ? url : new URL(url, window.location.origin).href
-                    });
-                }
-            });
-
-            return { products, articles };
+            return document.body.innerHTML.trim();
         });
 
-        // Lấy dữ liệu từ API
-        console.log('[Puppeteer] Thu thập yêu cầu API...');
-        const apiData = await page.evaluate(async () => {
-            const requests = [];
-            window.fetch = async (...args) => {
-                requests.push(args[0]);
-                return await window.originalFetch(...args);
-            };
-            window.originalFetch = window.fetch;
-            await new Promise(resolve => setTimeout(resolve, 2000));
-            return requests.filter(req => req.includes('api') || req.includes('products') || req.includes('articles') || req.includes('posts'));
-        });
+        // Áp dụng rule code trước
+         const { products: productsByRule, articles: articlesByRule } = extractProductsAndArticlesByRule(innerHTML, url);
 
-        if (apiData.length > 0) {
-            console.log('[Puppeteer] Phát hiện các yêu cầu API:', apiData);
-            for (const apiUrl of apiData) {
+        let allProducts = [];
+        let allArticles = [];
+        let backendResponses = [];
+
+        if (productsByRule.length >= 3 || articlesByRule.length >= 1) { // Nếu tách được đủ sản phẩm hoặc có bài viết
+            console.log(`[Puppeteer] ✅ Đã tách được ${productsByRule.length} sản phẩm và ${articlesByRule.length} bài viết bằng rule code, KHÔNG gửi lên OpenAI.`);
+            allProducts = productsByRule;
+            allArticles = articlesByRule;
+        } else {
+            // Nếu không tách được hoặc quá ít, mới gửi lên OpenAI như cũ
+            const MAX_LENGTH = 80000;
+            const htmlParts = splitStringByLength(innerHTML, MAX_LENGTH);
+
+            for (let idx = 0; idx < htmlParts.length; idx++) {
+                const part = htmlParts[idx];
+                const postData = {
+                    url,
+                    website_id: websiteId,
+                    chatbot_id: chatbotId,
+                    content: {
+                        innerHTML: part
+                    }
+                };
+                console.log(`[Puppeteer] Gửi đoạn ${idx + 1}/${htmlParts.length} về backend...`);
                 try {
-                    const response = await axios.get(apiUrl);
-                    const apiProducts = response.data.products || response.data.items || response.data;
-                    const apiArticles = response.data.articles || response.data.posts || [];
-
-                    if (Array.isArray(apiProducts)) {
-                        apiProducts.forEach(product => {
-                            if (product.name && product.price) {
-                                data.products.push({
-                                    type: 'product',
-                                    name: product.name,
-                                    price: product.price || product.priceText || '',
-                                    image: product.image || product.thumbnail || '',
-                                    url: product.url || product.link || ''
-                                });
-                            }
-                        });
-                    }
-
-                    if (Array.isArray(apiArticles)) {
-                        apiArticles.forEach(article => {
-                            if (article.title) {
-                                data.articles.push({
-                                    type: 'article',
-                                    title: article.title,
-                                    image: article.image || article.thumbnail || '',
-                                    url: article.url || article.link || ''
-                                });
-                            }
-                        });
-                    }
+                    const responseBackend = await axios.post('http://127.0.0.1:8000/api/process-scraped-content', postData, {
+                        headers: { 
+                            'Content-Type': 'application/json',
+                            'Accept': 'application/json'
+                        },
+                        timeout: 120000
+                    });
+                    const data = responseBackend.data;
+                    backendResponses.push(data);
+                    if (Array.isArray(data.products)) allProducts = allProducts.concat(data.products);
+                    if (Array.isArray(data.articles)) allArticles = allArticles.concat(data.articles);
+                    console.log(`[Puppeteer] ✅ Đoạn ${idx + 1} gửi thành công.`);
                 } catch (error) {
-                    console.warn('[Puppeteer] Lỗi khi lấy dữ liệu từ API:', error.message);
+                    console.warn(`[Puppeteer] ❌ Lỗi gửi đoạn ${idx + 1}: ${error.message}`);
                 }
             }
         }
 
-        // Lọc trùng lặp và sắp xếp
-        console.log('[Puppeteer] Lọc trùng lặp và sắp xếp dữ liệu...');
-        const uniqueProducts = [];
-        const productUrls = new Set();
-        data.products.forEach(product => {
-            if (!productUrls.has(product.url)) {
-                productUrls.add(product.url);
-                uniqueProducts.push(product);
-            }
-        });
-        uniqueProducts.sort((a, b) => a.name.localeCompare(b.name));
+        // Loại trùng sản phẩm/bài viết nếu cần (theo url)
+        const uniqueByUrl = (arr) => {
+            const seen = new Set();
+            return arr.filter(item => {
+                if (!item.url || seen.has(item.url)) return false;
+                seen.add(item.url);
+                return true;
+            });
+        };
 
-        const uniqueArticles = [];
-        const articleUrls = new Set();
-        data.articles.forEach(article => {
-            if (!articleUrls.has(article.url)) {
-                articleUrls.add(article.url);
-                uniqueArticles.push(article);
-            }
-        });
-        uniqueArticles.sort((a, b) => a.title.localeCompare(b.title));
+        allProducts = uniqueByUrl(allProducts);
+        allArticles = uniqueByUrl(allArticles);
 
-        data.products = uniqueProducts;
-        data.articles = uniqueArticles;
-
-        console.log(`[Puppeteer] ✅ Đã thu thập ${data.products.length} sản phẩm và ${data.articles.length} bài viết.`);
-
-        // Chuẩn bị dữ liệu để gửi về backend
-        const postData = {
+        // Gửi kết quả tổng hợp về backend để lưu
+        const finalPostData = {
             url,
             website_id: websiteId,
             chatbot_id: chatbotId,
             content: {
-                products: data.products,
-                articles: data.articles
+                products: allProducts,
+                articles: allArticles
             }
         };
-
-        // Nếu không có sản phẩm hoặc bài viết, lấy innerHTML
-        if (data.products.length === 0 && data.articles.length === 0) {
-            console.log('[Puppeteer] Không quét được dữ liệu, lấy innerHTML...');
-            const innerHTML = await page.evaluate(() => {
-                const elementsToRemove = ['script', 'style', 'nav', 'footer', '[class*="ad"]', '[class*="banner"]'];
-                elementsToRemove.forEach(selector => {
-                    document.querySelectorAll(selector).forEach(el => el.remove());
-                });
-                return document.body.innerHTML.trim();
+        try {
+            const saveResponse = await axios.post('http://127.0.0.1:8000/api/save-scraped-result', finalPostData, {
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json'
+                },
+                timeout: 120000
             });
-            postData.content.innerHTML = innerHTML.slice(0, 100000); // Giới hạn kích thước
+            console.log('[Puppeteer] ✅ Đã gửi kết quả tổng hợp về backend để lưu:', saveResponse.data);
+        } catch (error) {
+            console.warn('[Puppeteer] ❌ Lỗi khi gửi kết quả tổng hợp:', error.message);
         }
-
-        // Gửi dữ liệu về backend với retry logic
-        console.log(`[Puppeteer] Gửi dữ liệu về backend với website_id: ${websiteId}, chatbot_id: ${chatbotId}`);
-        const maxBackendRetries = 1;
-        let backendAttempt = 0;
-        let backendError = null;
-
-        while (backendAttempt < maxBackendRetries) {
-            try {
-                const responseBackend = await axios.post('http://127.0.0.1:8000/api/process-scraped-content', postData, {
-                    headers: { 
-                        'Content-Type': 'application/json',
-                        'Accept': 'application/json'
-                    },
-                    timeout: 120000 // Tăng timeout lên 120 giây
-                });
-                
-                console.log('[Puppeteer] ✅ Gửi dữ liệu về backend thành công.');
-                console.log('[Puppeteer] 🔁 Phản hồi từ backend:', responseBackend.data);
-                
-                const result = {
-                    url,
-                    website_id: websiteId,
-                    chatbot_id: chatbotId,
-                    products: data.products,
-                    articles: data.articles,
-                    innerHTML: postData.content.innerHTML || null,
-                    backendResponse: responseBackend.data
-                };
-                
-                return result;
-            } catch (error) {
-                backendAttempt++;
-                backendError = error;
-                console.warn(`[Puppeteer] Thử lại gửi backend (${backendAttempt}/${maxBackendRetries}): ${error.message}`);
-                
-                if (backendAttempt === maxBackendRetries) {
-                    console.log('[Puppeteer] Không thể gửi dữ liệu về backend sau nhiều lần thử.');
-                    return {
-                        ...postData,
-                        error: `Không thể gửi tới backend sau ${maxBackendRetries} lần thử: ${error.message}`
-                    };
-                }
-                
-                await new Promise(resolve => setTimeout(resolve, 2000 * backendAttempt));
-            }
-        }
+        return {
+            url,
+            website_id: websiteId,
+            chatbot_id: chatbotId,
+            products: allProducts,
+            articles: allArticles
+        };
 
     } catch (error) {
         console.error('[Puppeteer] ❌ Lỗi khi scrape:', error.message);

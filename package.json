@@ -1,13 +1,16 @@
 {
   "dependencies": {
-    "axios": "^1.9.0",
-    "express": "^5.1.0",
+    "axios": "^1.10.0",
+    "express": "^4.21.2",
     "jsdom": "^26.1.0",
     "puppeteer": "^24.9.0",
+    "puppeteer-cluster": "^0.24.0",
     "puppeteer-extra": "^3.3.6",
-    "puppeteer-extra-plugin-stealth": "^2.11.2"
+    "puppeteer-extra-plugin-stealth": "^2.11.2",
+    "winston": "^3.17.0",
+    "xml2js": "^0.6.2"
   },
-    "scripts": {
+  "scripts": {
     "postinstall": "npx puppeteer browsers install chrome --path .cache/puppeteer",
     "start": "node server.js"
   }

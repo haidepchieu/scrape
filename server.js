@@ -3,16 +3,17 @@ const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const axios = require('axios');
 const jsdom = require('jsdom');
+const xml2js = require('xml2js');
 const { JSDOM } = jsdom;
+const fs = require('fs');
 
 puppeteer.use(StealthPlugin());
 
 const app = express();
-const port = process.env.PORT || 3000;
+const port = 3000;
 
 app.use(express.json());
 
-// Hàm tự động cuộn trang để tải nội dung lazy-load
 async function autoScroll(page) {
     await page.evaluate(async () => {
         await new Promise(resolve => {
@@ -31,23 +32,10 @@ async function autoScroll(page) {
     });
 }
 
-// Hàm chia nhỏ chuỗi thành các đoạn nhỏ
-function splitStringByLength(str, maxLength) {
-    const result = [];
-    let i = 0;
-    while (i < str.length) {
-        result.push(str.slice(i, i + maxLength));
-        i += maxLength;
-    }
-    return result;
-}
-
-// Hàm tách sản phẩm bằng rule code (jsdom) - ĐÃ SỬA
 function extractProductsAndArticlesByRule(innerHTML, baseUrl) {
     const dom = new JSDOM(innerHTML);
     const document = dom.window.document;
 
-    // Hàm helper để chuyển relative URL thành absolute URL
     const toAbsoluteUrl = (url) => {
         if (!url) return '';
         if (url.startsWith('http')) return url;
@@ -56,12 +44,24 @@ function extractProductsAndArticlesByRule(innerHTML, baseUrl) {
         return new URL(url, baseUrl).href;
     };
 
-    // Sản phẩm
     const productNodes = document.querySelectorAll('div[class*="product"], li[class*="product"]');
     const products = [];
     productNodes.forEach(node => {
         let name = node.querySelector('h2, h3, .product-title, .title')?.textContent?.trim() || '';
-        let price = node.querySelector('.price, .product-price, [class*="price"]')?.textContent?.trim() || '';
+        let price = '';
+        const priceNodes = node.querySelectorAll('.price, .product-price, [class*="price"]');
+        for (let el of priceNodes) {
+            // Loại bỏ giá bị gạch ngang (giá gốc)
+            const style = el.getAttribute('style') || '';
+            if (!style.includes('line-through') && window.getComputedStyle && window.getComputedStyle(el).textDecoration !== 'line-through') {
+                price = el.textContent.replace(/[\n\r]+/g, ' ').trim();
+                if (price) break; // Lấy giá đầu tiên hợp lệ
+            }
+        }
+        // Nếu không tìm được, fallback lấy giá đầu tiên
+        if (!price && priceNodes.length > 0) {
+            price = priceNodes[0].textContent.replace(/[\n\r]+/g, ' ').trim();
+        }
         let img = toAbsoluteUrl(node.querySelector('img')?.getAttribute('src') || '');
         let url = toAbsoluteUrl(node.querySelector('a')?.getAttribute('href') || '');
         if (name) {
@@ -69,7 +69,6 @@ function extractProductsAndArticlesByRule(innerHTML, baseUrl) {
         }
     });
 
-    // Bài viết
     const articleNodes = document.querySelectorAll('div[class*="article"], li[class*="article"], div[class*="post"], li[class*="post"], article');
     const articles = [];
     articleNodes.forEach(node => {
@@ -84,15 +83,13 @@ function extractProductsAndArticlesByRule(innerHTML, baseUrl) {
     return { products, articles };
 }
 
-// Hàm scrape website
-async function scrapeWebsite(url, websiteId, chatbotId, req) {
-    console.log(`[Puppeteer] Bắt đầu scrape ${url}...`);
+async function scrapeWebsite(url) {
+    console.log(`\n[Puppeteer] === Bắt đầu scrape ${url} ===`);
     let browser, page;
     try {
-        console.log('[Puppeteer] Khởi tạo trình duyệt Puppeteer...');
         browser = await puppeteer.launch({
             headless: 'new',
-            
+            executablePath: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
             timeout: 0,
             args: [
                 '--no-sandbox',
@@ -113,88 +110,22 @@ async function scrapeWebsite(url, websiteId, chatbotId, req) {
         await page.setBypassCSP(true);
 
         console.log(`[Puppeteer] Truy cập URL: ${url}`);
-        const maxRetries = 3;
-        let attempt = 0;
-        let response;
-        while (attempt < maxRetries) {
-            try {
-                response = await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
-                console.log(`[Puppeteer] Truy cập URL thành công, status: ${response.status()}`);
-                if (!response.ok()) {
-                    throw new Error(`HTTP ${response.status()}: ${response.statusText()}`);
-                }
-                break;
-            } catch (error) {
-                attempt++;
-                console.warn(`[Puppeteer] Thử lại (${attempt}/${maxRetries}): ${error.message}`);
-                if (attempt === maxRetries) throw error;
-                await new Promise(resolve => setTimeout(resolve, 2000));
-            }
-        }
+        await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
 
-        console.log('[Puppeteer] Cuộn trang để tải nội dung lazy...');
+        console.log('[Puppeteer] Cuộn trang để tải nội dung...');
         await autoScroll(page);
-        await new Promise(resolve => setTimeout(resolve, 10000)); // Chờ thêm để nội dung tải hết
+        await new Promise(resolve => setTimeout(resolve, 5000));
 
-        // Lấy innerHTML đã loại bỏ các thẻ không cần thiết
-        console.log('[Puppeteer] Lấy innerHTML đã loại bỏ các thẻ không cần thiết...');
         const innerHTML = await page.evaluate(() => {
-            const elementsToRemove = [
-                'script', 'style', 'footer', 'header',
-            ];
+            const elementsToRemove = ['script', 'style', 'footer', 'header'];
             elementsToRemove.forEach(selector => {
                 document.querySelectorAll(selector).forEach(el => el.remove());
             });
             return document.body.innerHTML.trim();
         });
 
-        // Áp dụng rule code trước
-         const { products: productsByRule, articles: articlesByRule } = extractProductsAndArticlesByRule(innerHTML, url);
+        const { products, articles } = extractProductsAndArticlesByRule(innerHTML, url);
 
-        let allProducts = [];
-        let allArticles = [];
-        let backendResponses = [];
-
-        if (productsByRule.length >= 3 || articlesByRule.length >= 1) { // Nếu tách được đủ sản phẩm hoặc có bài viết
-            console.log(`[Puppeteer] ✅ Đã tách được ${productsByRule.length} sản phẩm và ${articlesByRule.length} bài viết bằng rule code, KHÔNG gửi lên OpenAI.`);
-            allProducts = productsByRule;
-            allArticles = articlesByRule;
-        } else {
-            // Nếu không tách được hoặc quá ít, mới gửi lên OpenAI như cũ
-            const MAX_LENGTH = 80000;
-            const htmlParts = splitStringByLength(innerHTML, MAX_LENGTH);
-
-            for (let idx = 0; idx < htmlParts.length; idx++) {
-                const part = htmlParts[idx];
-                const postData = {
-                    url,
-                    website_id: websiteId,
-                    chatbot_id: chatbotId,
-                    content: {
-                        innerHTML: part
-                    }
-                };
-                console.log(`[Puppeteer] Gửi đoạn ${idx + 1}/${htmlParts.length} về backend...`);
-                try {
-                    const responseBackend = await axios.post('https://chatbot.newwaytech.vn/api/process-scraped-content', postData, {
-                        headers: { 
-                            'Content-Type': 'application/json',
-                            'Accept': 'application/json'
-                        },
-                        timeout: 120000
-                    });
-                    const data = responseBackend.data;
-                    backendResponses.push(data);
-                    if (Array.isArray(data.products)) allProducts = allProducts.concat(data.products);
-                    if (Array.isArray(data.articles)) allArticles = allArticles.concat(data.articles);
-                    console.log(`[Puppeteer] ✅ Đoạn ${idx + 1} gửi thành công.`);
-                } catch (error) {
-                    console.warn(`[Puppeteer] ❌ Lỗi gửi đoạn ${idx + 1}: ${error.message}`);
-                }
-            }
-        }
-
-        // Loại trùng sản phẩm/bài viết nếu cần (theo url)
         const uniqueByUrl = (arr) => {
             const seen = new Set();
             return arr.filter(item => {
@@ -204,42 +135,15 @@ async function scrapeWebsite(url, websiteId, chatbotId, req) {
             });
         };
 
-        allProducts = uniqueByUrl(allProducts);
-        allArticles = uniqueByUrl(allArticles);
+        const allProducts = uniqueByUrl(products);
+        const allArticles = uniqueByUrl(articles);
 
-        // Gửi kết quả tổng hợp về backend để lưu
-        const finalPostData = {
-            url,
-            website_id: websiteId,
-            chatbot_id: chatbotId,
-            content: {
-                products: allProducts,
-                articles: allArticles
-            }
-        };
-        try {
-            const saveResponse = await axios.post('https://chatbot.newwaytech.vn/api/save-scraped-result', finalPostData, {
-                headers: { 
-                    'Content-Type': 'application/json',
-                    'Accept': 'application/json'
-                },
-                timeout: 120000
-            });
-            console.log('[Puppeteer] ✅ Đã gửi kết quả tổng hợp về backend để lưu:', saveResponse.data);
-        } catch (error) {
-            console.warn('[Puppeteer] ❌ Lỗi khi gửi kết quả tổng hợp:', error.message);
-        }
-        return {
-            url,
-            website_id: websiteId,
-            chatbot_id: chatbotId,
-            products: allProducts,
-            articles: allArticles
-        };
+        console.log(`[Puppeteer] ✅ Đã tách được ${allProducts.length} sản phẩm và ${allArticles.length} bài viết từ URL: ${url}`);
+
+        return { url, products: allProducts, articles: allArticles };
 
     } catch (error) {
-        console.error('[Puppeteer] ❌ Lỗi khi scrape:', error.message);
-        console.error('[Puppeteer] Stack trace:', error.stack);
+        console.error(`[Puppeteer] ❌ Lỗi khi scrape: ${url} →`, error.message);
         return { error: error.message };
     } finally {
         if (browser) {
@@ -249,75 +153,122 @@ async function scrapeWebsite(url, websiteId, chatbotId, req) {
     }
 }
 
-// API endpoint để scrape
+async function parseSitemapXml(sitemapUrl) {
+    console.log(`\n[Sitemap] === Đang tải sitemap: ${sitemapUrl}`);
+    try {
+        const response = await axios.get(sitemapUrl);
+        const xml = response.data;
+        const parser = new xml2js.Parser();
+        const result = await parser.parseStringPromise(xml);
+
+        let urls = [];
+
+        if (result.urlset && result.urlset.url) {
+            urls = result.urlset.url.map(u => u.loc[0]);
+        } else if (result.sitemapindex && result.sitemapindex.sitemap) {
+            const sitemapUrls = result.sitemapindex.sitemap.map(s => s.loc[0]);
+            console.log(`[Sitemap] Sitemap index - phát hiện ${sitemapUrls.length} sitemap con`);
+            for (const subSitemapUrl of sitemapUrls) {
+                const subUrls = await parseSitemapXml(subSitemapUrl);
+                urls = urls.concat(subUrls);
+            }
+        }
+
+        console.log(`[Sitemap] Tổng cộng ${urls.length} URL lấy được từ ${sitemapUrl}`);
+        return urls;
+
+    } catch (error) {
+        console.error(`[Sitemap] ❌ Lỗi tải sitemap: ${error.message}`);
+        return [];
+    }
+}
+
+async function tryGetSitemapUrl(baseUrl) {
+    const sitemapUrl = baseUrl.endsWith('/') ? `${baseUrl}sitemap.xml` : `${baseUrl}/sitemap.xml`;
+    console.log(`\n[Detect] Thử tìm sitemap tại: ${sitemapUrl}`);
+    try {
+        const response = await axios.get(sitemapUrl);
+        if (response.status === 200 && response.data.includes('<?xml')) {
+            console.log('[Detect] ✅ Tìm thấy sitemap.xml');
+            return sitemapUrl;
+        }
+    } catch (err) {
+        console.log('[Detect] ❌ Không tìm thấy sitemap.xml');
+    }
+    return null;
+}
+
+async function crawlAllUrlsFromSitemap(sitemapUrl) {
+    let urls = await parseSitemapXml(sitemapUrl);
+
+    // GIỚI HẠN 50 URL
+    const maxUrls = 10;
+    urls = urls.slice(0, maxUrls);
+    console.log(`\n[Crawler] ⚠️ Đang crawl tối đa ${urls.length} URL đầu tiên.`);
+
+    const globalProductsMap = new Map();
+    const globalArticlesMap = new Map();
+
+    for (let i = 0; i < urls.length; i++) {
+        const url = urls[i];
+        console.log(`\n[Crawler] (${i + 1}/${urls.length}) Đang quét URL: ${url}`);
+
+        try {
+            const result = await scrapeWebsite(url);
+
+            let newProductsCount = 0;
+
+            result.products.forEach(product => {
+                const key = `${product.name}|${product.url}`.toLowerCase();
+                if (!globalProductsMap.has(key)) {
+                    globalProductsMap.set(key, product);
+                    newProductsCount++;
+                } else {
+                    console.log(`[Crawler] 🔁 Trùng sản phẩm: ${product.name} (${product.url})`);
+                }
+            });
+
+            result.articles.forEach(article => {
+                const key = `${article.title}|${article.url}`.toLowerCase();
+                if (!globalArticlesMap.has(key)) {
+                    globalArticlesMap.set(key, article);
+                }
+            });
+
+            console.log(`[Crawler] ✅ Xong URL: ${url} → Sản phẩm mới: ${newProductsCount}, Bài viết: ${result.articles?.length || 0}`);
+            await new Promise(resolve => setTimeout(resolve, 1500));
+        } catch (error) {
+            console.error(`[Crawler] ❌ Lỗi khi quét URL: ${url}`, error.message);
+        }
+    }
+
+    console.log(`\n[Crawler] 🎉 Hoàn thành crawl ${urls.length} URL. Tổng sản phẩm KHÔNG TRÙNG: ${globalProductsMap.size}, Tổng bài viết KHÔNG TRÙNG: ${globalArticlesMap.size}`);
+
+    const allProducts = Array.from(globalProductsMap.values());
+    const allArticles = Array.from(globalArticlesMap.values());
+
+    return { products: allProducts, articles: allArticles };
+}
+
 app.get('/scrape', async (req, res) => {
-    const { url, websiteId, chatbotId } = req.query;
+    const { url } = req.query;
     if (!url) return res.status(400).json({ error: 'URL is required' });
-    const result = await scrapeWebsite(url, websiteId || 0, chatbotId || null, req);
-    res.json(result);
-});
 
-// API endpoint để test Chrome
-app.get('/test-chrome', async (req, res) => {
-    let browser;
-    try {
-        console.log('[Test] Bắt đầu kiểm tra Chrome với Puppeteer...');
-        browser = await puppeteer.launch({
-            headless: 'new',
-            
-            args: ['--no-sandbox', '--disable-extensions'],
-            timeout: 180000,
-        });
-        console.log('[Test] Trình duyệt Chrome khởi tạo thành công!');
+    console.log(`\n[Main] === Bắt đầu SCRAPE cho: ${url}`);
 
-        const page = await browser.newPage();
-        await page.goto('https://www.google.com', { waitUntil: 'networkidle2' });
-        console.log('[Test] Truy cập google.com thành công.');
-        const title = await page.title();
-        console.log('[Test] Tiêu đề trang:', title);
+    const sitemapUrl = await tryGetSitemapUrl(url);
 
-        await browser.close();
-        console.log('[Test] Đã đóng trình duyệt.');
-        res.json({ status: 'success', title });
-    } catch (error) {
-        console.error('[Test] Lỗi:', error.message);
-        if (browser) await browser.close();
-        res.json({ status: 'error', error: error.message });
+    if (sitemapUrl) {
+        console.log('\n[Main] Phát hiện sitemap → Tiến hành crawl toàn site');
+        const result = await crawlAllUrlsFromSitemap(sitemapUrl);
+        res.json({ status: 'done (full site)', sitemapUrl, ...result });
+    } else {
+        console.log('\n[Main] Không có sitemap → Chỉ scrape URL truyền vào');
+        const result = await scrapeWebsite(url);
+        res.json(result);
     }
 });
 
-// API endpoint để test URL
-app.get('/test-url', async (req, res) => {
-    const url = req.query.url || 'http://127.0.0.1:8082/';
-    let browser;
-    try {
-        console.log(`[Test] Bắt đầu kiểm tra truy cập URL: ${url}`);
-        browser = await puppeteer.launch({
-            headless: 'new',
-            
-            args: ['--no-sandbox', '--disable-extensions'],
-            timeout: 180000,
-        });
-        console.log('[Test] Trình duyệt khởi tạo thành công.');
-
-        const page = await browser.newPage();
-        const response = await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
-        console.log(`[Test] Truy cập thành công, status: ${response.status()}`);
-
-        const title = await page.title();
-        console.log('[Test] Tiêu đề trang:', title);
-
-        await browser.close();
-        console.log('[Test] Đã đóng trình duyệt.');
-        res.json({ status: 'success', title, httpStatus: response.status() });
-    } catch (error) {
-        console.error('[Test] Lỗi:', error.message);
-        if (browser) await browser.close();
-        res.json({ status: 'error', error: error.message });
-    }
-});
-
-// Chạy server
 app.listen(port, () => {
-    console.log(`Server running at http://localhost:${port}`);
+    console.log(`\n🚀 Server running at http://localhost:${port}`);
 });
