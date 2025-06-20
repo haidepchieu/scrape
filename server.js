@@ -53,14 +53,14 @@ function extractProductsAndArticlesByRule(innerHTML, baseUrl) {
         for (let el of priceNodes) {
             // Loại bỏ giá bị gạch ngang (giá gốc)
             const style = el.getAttribute('style') || '';
-            if (!style.includes('line-through') && window.getComputedStyle && window.getComputedStyle(el).textDecoration !== 'line-through') {
+            const className = el.className || '';
+            if (
+                !style.includes('line-through') &&
+                !className.match(/old|original|strike|gach/i)
+            ) {
                 price = el.textContent.replace(/[\n\r]+/g, ' ').trim();
                 if (price) break; // Lấy giá đầu tiên hợp lệ
             }
-        }
-        // Nếu không tìm được, fallback lấy giá đầu tiên
-        if (!price && priceNodes.length > 0) {
-            price = priceNodes[0].textContent.replace(/[\n\r]+/g, ' ').trim();
         }
         let img = toAbsoluteUrl(node.querySelector('img')?.getAttribute('src') || '');
         let url = toAbsoluteUrl(node.querySelector('a')?.getAttribute('href') || '');
@@ -198,7 +198,7 @@ async function tryGetSitemapUrl(baseUrl) {
     return null;
 }
 
-async function crawlAllUrlsFromSitemap(sitemapUrl) {
+async function crawlAllUrlsFromSitemap(sitemapUrl, baseUrl, websiteId, chatbotId) {
     let urls = await parseSitemapXml(sitemapUrl);
 
     // GIỚI HẠN 50 URL
@@ -246,12 +246,11 @@ async function crawlAllUrlsFromSitemap(sitemapUrl) {
 
     const allProducts = Array.from(globalProductsMap.values());
     const allArticles = Array.from(globalArticlesMap.values());
-
     return { products: allProducts, articles: allArticles };
 }
 
 app.get('/scrape', async (req, res) => {
-    const { url } = req.query;
+    const { url, website_id, chatbot_id } = req.query;
     if (!url) return res.status(400).json({ error: 'URL is required' });
 
     console.log(`\n[Main] === Bắt đầu SCRAPE cho: ${url}`);
@@ -260,7 +259,7 @@ app.get('/scrape', async (req, res) => {
 
     if (sitemapUrl) {
         console.log('\n[Main] Phát hiện sitemap → Tiến hành crawl toàn site');
-        const result = await crawlAllUrlsFromSitemap(sitemapUrl);
+        const result = await crawlAllUrlsFromSitemap(sitemapUrl, url, website_id, chatbot_id);
         res.json({ status: 'done (full site)', sitemapUrl, ...result });
     } else {
         console.log('\n[Main] Không có sitemap → Chỉ scrape URL truyền vào');
