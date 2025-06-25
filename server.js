@@ -89,7 +89,7 @@ async function scrapeWebsite(url) {
     try {
         browser = await puppeteer.launch({
             headless: 'new',
-            executablePath: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+            
             timeout: 0,
             args: [
                 '--no-sandbox',
