@@ -11,7 +11,7 @@
     "xml2js": "^0.6.2"
   },
   "scripts": {
-    "postinstall": "npx puppeteer browsers install chrome --path .cache/puppeteer",
     "start": "node server.js"
-  }
+  },
+  "license": "MIT"
 }

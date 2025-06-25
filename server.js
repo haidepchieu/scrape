@@ -6,11 +6,12 @@ const jsdom = require('jsdom');
 const xml2js = require('xml2js');
 const { JSDOM } = jsdom;
 const fs = require('fs');
+const { Cluster } = require('puppeteer-cluster');
 
 puppeteer.use(StealthPlugin());
 
 const app = express();
-const port = 3000;
+const port = process.env.PORT || 3000;
 
 app.use(express.json());
 
@@ -85,12 +86,18 @@ function extractProductsAndArticlesByRule(innerHTML, baseUrl) {
 
 async function scrapeWebsite(url) {
     console.log(`\n[Puppeteer] === Bắt đầu scrape ${url} ===`);
-    let browser, page;
-    try {
-        browser = await puppeteer.launch({
-            headless: 'new',
+    const os = require('os');
+    console.log(`[Puppeteer] RAM: ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)} MB`);
+    console.log(`[Puppeteer] CPU: ${os.loadavg()[0].toFixed(2)}`);
+
+    const cluster = await Cluster.launch({
+        concurrency: Cluster.CONCURRENCY_PAGE,
+        maxConcurrency: 1, // Chỉ 1 trang
+        puppeteerOptions: {
+            headless: true,
             protocolTimeout: 300000,
             timeout: 0,
+            executablePath: '/usr/bin/google-chrome', // Dùng Chrome có sẵn
             args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
@@ -99,58 +106,65 @@ async function scrapeWebsite(url) {
                 '--disable-gpu',
                 '--window-size=1280,720',
                 '--disable-background-timer-throttling',
-                '--disable-backgrounding-occluded-windows',
-                '--disable-renderer-backgrounding'
+                '--disable-backgrounding-occluded-windows'
             ]
-});
+        }
+    });
 
-        page = await browser.newPage();
-        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36');
-        await page.setExtraHTTPHeaders({ 'Accept-Language': 'en-US,en;q=0.9' });
-        await page.setBypassCSP(true);
+    let result = null;
+    try {
+        await cluster.task(async ({ page, data: url }) => {
+            await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36');
+            await page.setExtraHTTPHeaders({ 'Accept-Language': 'en-US,en;q=0.9' });
+            await page.setBypassCSP(true);
+            await page.setViewport({ width: 1280, height: 720 });
 
-        console.log(`[Puppeteer] Truy cập URL: ${url}`);
-        await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
+            console.log(`[Puppeteer] Truy cập URL: ${url}`);
+            await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 120000 });
 
-        console.log('[Puppeteer] Cuộn trang để tải nội dung...');
-        await autoScroll(page);
-        await new Promise(resolve => setTimeout(resolve, 5000));
-
-        const innerHTML = await page.evaluate(() => {
-            const elementsToRemove = ['script', 'style', 'footer', 'header'];
-            elementsToRemove.forEach(selector => {
-                document.querySelectorAll(selector).forEach(el => el.remove());
+            const isCaptcha = await page.evaluate(() => {
+                return !!document.querySelector('input[name="cf-turnstile-response"]') ||
+                       !!document.querySelector('#recaptcha') ||
+                       !!document.querySelector('.g-recaptcha');
             });
-            return document.body.innerHTML.trim();
+            if (isCaptcha) {
+                console.log('[Puppeteer] Phát hiện CAPTCHA, bỏ qua');
+                result = { error: 'CAPTCHA detected' };
+                return;
+            }
+
+            console.log('[Puppeteer] Cuộn trang...');
+            await autoScroll(page);
+            await new Promise(resolve => setTimeout(resolve, 5000));
+
+            const innerHTML = await page.evaluate(() => {
+                const elements = ['script', 'style', 'footer', 'header'];
+                elements.forEach(sel => document.querySelectorAll(sel).forEach(el => el.remove()));
+                return document.body.innerHTML.trim();
+            });
+
+            const { products, articles } = extractProductsAndArticlesByRule(innerHTML, url);
+            const uniqueByUrl = arr => {
+                const seen = new Set();
+                return arr.filter(item => {
+                    if (!item.url || seen.has(item.url)) return false;
+                    seen.add(item.url);
+                    return true;
+                });
+            };
+            result = { url, products: uniqueByUrl(products), articles: uniqueByUrl(articles) };
         });
 
-        const { products, articles } = extractProductsAndArticlesByRule(innerHTML, url);
-
-        const uniqueByUrl = (arr) => {
-            const seen = new Set();
-            return arr.filter(item => {
-                if (!item.url || seen.has(item.url)) return false;
-                seen.add(item.url);
-                return true;
-            });
-        };
-
-        const allProducts = uniqueByUrl(products);
-        const allArticles = uniqueByUrl(articles);
-
-        console.log(`[Puppeteer] ✅ Đã tách được ${allProducts.length} sản phẩm và ${allArticles.length} bài viết từ URL: ${url}`);
-
-        return { url, products: allProducts, articles: allArticles };
-
+        await cluster.queue(url);
+        await cluster.idle();
     } catch (error) {
-        console.error(`[Puppeteer] ❌ Lỗi khi scrape: ${url} →`, error.message);
-        return { error: error.message };
+        console.error(`[Puppeteer] Lỗi: ${error.message}`);
+        result = { error: error.message };
     } finally {
-        if (browser) {
-            await browser.close();
-            console.log('[Puppeteer] 🔚 Đã đóng trình duyệt.');
-        }
+        await cluster.close();
+        console.log('[Puppeteer] Đã đóng cluster.');
     }
+    return result || { error: 'No data scraped' };
 }
 
 async function parseSitemapXml(sitemapUrl) {
@@ -273,5 +287,5 @@ app.get('/scrape', async (req, res) => {
 });
 
 app.listen(port, () => {
-    console.log(`\n🚀 Server running at http://localhost:${port}`);
+    console.log(`\n🚀 Server running on port ${port}`);
 });
