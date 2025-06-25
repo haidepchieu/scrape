@@ -89,7 +89,7 @@ async function scrapeWebsite(url) {
     try {
         browser = await puppeteer.launch({
             headless: 'new',
-            
+            protocolTimeout: 120000,
             timeout: 0,
             args: [
                 '--no-sandbox',
@@ -216,30 +216,34 @@ async function crawlAllUrlsFromSitemap(sitemapUrl, baseUrl, websiteId, chatbotId
         try {
             const result = await scrapeWebsite(url);
 
-            let newProductsCount = 0;
+                let newProductsCount = 0;
 
-            result.products.forEach(product => {
-                const key = `${product.name}|${product.url}`.toLowerCase();
-                if (!globalProductsMap.has(key)) {
-                    globalProductsMap.set(key, product);
-                    newProductsCount++;
-                } else {
-                    console.log(`[Crawler] 🔁 Trùng sản phẩm: ${product.name} (${product.url})`);
+                if (Array.isArray(result.products)) {
+                    result.products.forEach(product => {
+                        const key = `${product.name}|${product.url}`.toLowerCase();
+                        if (!globalProductsMap.has(key)) {
+                            globalProductsMap.set(key, product);
+                            newProductsCount++;
+                        } else {
+                            console.log(`[Crawler] 🔁 Trùng sản phẩm: ${product.name} (${product.url})`);
+                        }
+                    });
                 }
-            });
 
-            result.articles.forEach(article => {
-                const key = `${article.title}|${article.url}`.toLowerCase();
-                if (!globalArticlesMap.has(key)) {
-                    globalArticlesMap.set(key, article);
+                if (Array.isArray(result.articles)) {
+                    result.articles.forEach(article => {
+                        const key = `${article.title}|${article.url}`.toLowerCase();
+                        if (!globalArticlesMap.has(key)) {
+                            globalArticlesMap.set(key, article);
+                        }
+                    });
                 }
-            });
 
-            console.log(`[Crawler] ✅ Xong URL: ${url} → Sản phẩm mới: ${newProductsCount}, Bài viết: ${result.articles?.length || 0}`);
-            await new Promise(resolve => setTimeout(resolve, 1500));
-        } catch (error) {
-            console.error(`[Crawler] ❌ Lỗi khi quét URL: ${url}`, error.message);
-        }
+                console.log(`[Crawler] ✅ Xong URL: ${url} → Sản phẩm mới: ${newProductsCount}, Bài viết: ${result.articles?.length || 0}`);
+                await new Promise(resolve => setTimeout(resolve, 1500));
+            } catch (error) {
+                console.error(`[Crawler] ❌ Lỗi khi quét URL: ${url}`, error.message);
+            }
     }
 
     console.log(`\n[Crawler] 🎉 Hoàn thành crawl ${urls.length} URL. Tổng sản phẩm KHÔNG TRÙNG: ${globalProductsMap.size}, Tổng bài viết KHÔNG TRÙNG: ${globalArticlesMap.size}`);
