@@ -89,7 +89,7 @@ async function scrapeWebsite(url) {
     try {
         browser = await puppeteer.launch({
             headless: 'new',
-            protocolTimeout: 120000,
+            protocolTimeout: 300000,
             timeout: 0,
             args: [
                 '--no-sandbox',
@@ -97,12 +97,12 @@ async function scrapeWebsite(url) {
                 '--disable-dev-shm-usage',
                 '--disable-accelerated-2d-canvas',
                 '--disable-gpu',
-                '--no-zygote',
-                '--single-process',
-                '--disable-web-security',
-                '--disable-features=IsolateOrigins,site-per-process'
+                '--window-size=1280,720',
+                '--disable-background-timer-throttling',
+                '--disable-backgrounding-occluded-windows',
+                '--disable-renderer-backgrounding'
             ]
-        });
+});
 
         page = await browser.newPage();
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36');
